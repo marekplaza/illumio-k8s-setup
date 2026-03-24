@@ -71,7 +71,6 @@ build_helm_chart:
 
     # Fix manifests
     - python3 add_imagePullSecret.py
-    - python3 add_resources_limits.py
 
     # Extract container image info (for reference/debugging)
     - python3 extract.py

@@ -1,0 +1,32 @@
+# Copyright 2023 Illumio, Inc. All Rights Reserved.
+#
+# Kubelink
+ 
+{{- if or (eq (lower .Values.clusterMode) "migratelegacytoclas") (eq (lower .Values.clusterMode) "clas") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: illumio-kubelink-clas
+  namespace: {{ include "illumio.namespace" . }}
+  {{- if .Values.commonLabels }}
+  labels: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+  {{- end }}
+  annotations:
+    {{- if .Values.commonAnnotations }}
+    {{include "illumio.renderDictionary" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: kubelink-service
+      port: 9000
+      protocol: TCP
+    - name: webhook-server-service
+      port: 9001
+      protocol: TCP
+    - name: init-container-server-service
+      port: 9002
+      protocol: TCP
+  selector:
+    app: illumio-kubelink
+{{- end }}

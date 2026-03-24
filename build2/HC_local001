@@ -1,0 +1,12 @@
+kubelink_registry=quay.io/illumio
+kubelink_repo=kubelink
+kubelink_imageTag=5.9.0-3
+kubelink_imagePullPolicy=IfNotPresent
+cven_registry=quay.io/illumio
+cven_repo=cven
+cven_imageTag=23.4.11-8-cven23411
+cven_imagePullPolicy=IfNotPresent
+storage_registry=quay.io/illumio
+storage_repo=storage
+storage_imageTag=3.6.8-6
+storage_imagePullPolicy=IfNotPresent

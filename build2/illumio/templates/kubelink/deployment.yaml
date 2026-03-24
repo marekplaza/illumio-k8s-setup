@@ -1,0 +1,255 @@
+# Copyright 2021 Illumio, Inc. All Rights Reserved.
+#
+# Kubelink
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: illumio-kubelink
+  namespace: {{ include "illumio.namespace" . }}
+  {{- if .Values.commonLabels }}
+  labels: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+  {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: illumio-kubelink
+      {{- if .Values.commonLabels }}
+      {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 6 }}
+      {{- end }}
+  revisionHistoryLimit: 3
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/kubelink/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/kubelink/secret.yaml") . | sha256sum }}
+      labels:
+        app: illumio-kubelink
+        {{- if .Values.commonLabels }}
+        {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: illumio-kubelink
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- include "illumio.renderDictionary" ( dict "value" .Values.nodeSelector "context" $ ) | nindent 8 }}
+      {{- end }}
+      {{- if .Values.priorityClasses.enabled }}
+      priorityClassName:  {{ .Values.priorityClasses.kubelink }}
+      {{- end }}
+      {{- include "renderPullSecrets" ( dict "images" (list .Values.kubelink) "context" $ ) | nindent 6 }}
+      {{- if eq .Values.containerManager "kubernetes" }}
+      securityContext:
+        fsGroup: 1001
+      {{- end }}
+      containers:
+        - name: illumio-kubelink
+          image: "{{ .Values.kubelink.registry }}/{{ .Values.kubelink.repo }}:{{ .Values.kubelink.imageTag }}"
+          imagePullPolicy: {{ .Values.kubelink.imagePullPolicy | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 1
+            {{- if or (eq (lower .Values.clusterMode) "migratelegacytoclas") (eq (lower .Values.clusterMode) "clas") }}
+            failureThreshold: 48
+            {{- else }}
+            failureThreshold: 20
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 1
+            {{- if or (eq (lower .Values.clusterMode) "migratelegacytoclas") (eq (lower .Values.clusterMode) "clas") }}
+            failureThreshold: 24
+            {{- else }}
+            failureThreshold: 10
+            {{- end }}
+          env:
+            - name: ILO_SERVER
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: ilo_server
+            - name: ILO_CLUSTER_UUID
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: ilo_cluster_uuid
+            - name: ILO_CLUSTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: ilo_cluster_token
+            - name: IGNORE_CERT
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: ignore_cert
+                  optional: true
+            - name: VERBOSITY
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: verbosity
+                  optional: true
+            - name: CONTAINER_MANAGER
+              value: {{ .Values.containerManager | quote }}
+            {{- if .Values.networkType }}
+            - name: NETWORK_TYPE
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: networkType
+                  optional: true
+            {{- end }}
+            - name: CLUSTER_MODE
+              value: {{ .Values.clusterMode | quote }}
+            {{- if or (eq (lower .Values.clusterMode) "migratelegacytoclas") (eq (lower .Values.clusterMode) "clas") }}
+            - name: WAIT_FOR_POLICY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: waitForPolicyEnabled
+                  optional: true
+            - name: WAIT_FOR_POLICY_IGNORED_NAMESPACES
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: waitForPolicyIgnoredNamespaces
+                  optional: true
+            - name: USER_ALLOWED_ANNOTATIONS
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: userAllowedAnnotations
+                  optional: true
+            - name: WAIT_FOR_POLICY_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: waitForPolicyTimeout
+                  optional: true
+            - name: WAIT_FOR_POLICY_IMAGE
+              value: "{{ .Values.initcontainer.registry }}/{{ .Values.initcontainer.repo }}:{{ .Values.initcontainer.imageTag }}"
+            - name: WAIT_FOR_POLICY_IMAGE_PULL_POLICY
+              value: {{ .Values.initcontainer.imagePullPolicy | quote }}
+            - name: DEGRADED_MODE_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: degradedModeEnabled
+                  optional: true
+            - name: REPORT_HOST_NETWORK_KUBERNETES_WORKLOADS
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: reportHostNetworkKubernetesWorkloads
+            - name: POLICY_LABEL_SET_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: policyLabelSetEnable
+            - name: DEGRADED_MODE_POLICY_FAIL
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: degradedModePolicyFail
+                  optional: true
+            - name: ETCD_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: etcd_root_password
+            - name: ETCD_ENDPOINTS
+              value: "illumio-storage-0.illumio-storage:2379"
+            - name: ETCD_RETRY_ATTEMPTS
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: etcdRetryAttempts
+                  optional: true
+            - name: ILO_STATUS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: policy_status_password
+            {{- if (.Values.metrics).enabled }}
+            - name: INFLUXDB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-influxdb
+                  key: admin-user-token
+            - name: INFLUXDB_DEPLOYMENT
+              value: {{ .Release.Name }}-influxdb
+            {{- end }}
+            {{- end }}
+            - name: PCE_API_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: pceApiTimeout
+                  optional: true
+            - name: PCE_API_MIN_BACKOFF
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: pceApiMinBackoff
+                  optional: true
+            - name: PCE_API_MAX_BACKOFF
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: pceApiMaxBackoff
+                  optional: true
+            - name: PCE_API_POLICY_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: pceApiPolicyInterval
+                  optional: true
+            - name: ILO_PROXY_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: httpProxy
+                  optional: true
+            - name: LAST_APPLIED_POLICY_UPDATE_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: lastAppliedPolicyUpdateInterval
+                  optional: true
+            - name: SUPPORT_REPORT_VOLUME_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: illumio-config
+                  key: supportReportVolumeSize
+                  optional: true
+            - name: USE_TLS
+              value: {{ include "isTLSenabled" . | quote }}
+          resources: {{- include "illumio.renderDictionary" ( dict "value" .Values.kubelink.resources "context" $ ) | nindent 12 }}
+          volumeMounts:
+            - mountPath: /sr
+              name: supportreport
+          {{- if .Values.extraVolumeMounts }}
+            {{- include "illumio.renderDictionary" ( dict "value" .Values.extraVolumeMounts "context" $ ) | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: supportreport
+          emptyDir:
+            sizeLimit: {{ .Values.kubelink.supportReportVolumeSize | default "2Gi" }}
+      {{- if .Values.extraVolumes }}
+        {{- include "illumio.renderDictionary" ( dict "value" .Values.extraVolumes "context" $ ) | nindent 8 }}
+      {{- end }}

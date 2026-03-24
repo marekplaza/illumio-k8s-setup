@@ -1,0 +1,118 @@
+# Copyright 2021 Illumio, Inc. All Rights Reserved.
+#
+# Kubelink
+
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: illumio-kubelink
+  {{- if .Values.commonLabels }}
+  labels: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+  {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+rules:
+  - apiGroups:
+      - "*"
+    resources:
+      - nodes
+      - hostsubnets
+      - replicationcontrollers
+      - services
+      - replicasets
+      - daemonsets
+      - namespaces
+      - statefulsets
+      - pods
+      - pods/log
+      - clusternetworks
+      - networks
+      - deployments
+      - jobs
+      - cronjobs
+      - deploymentconfigs
+    verbs:
+      - list
+      - watch
+      - get
+  - apiGroups:
+      - "*"
+    resources:
+      - replicationcontrollers
+      - services
+      - replicasets
+      - daemonsets
+      - statefulsets
+      - pods
+      - deployments
+      - jobs
+      - cronjobs
+      - deploymentconfigs
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - "*"
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  - apiGroups:
+      - ic4k.illumio.com
+    resources:
+      - labelmaps
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ic4k.illumio.com
+    resources:
+      - labelmaps/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - mutatingwebhookconfigurations
+    verbs:
+      - create
+      - delete
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: illumio-security-admin
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+  {{- if .Values.commonLabels }}
+    {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+  {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+rules:
+  - apiGroups:
+      - ic4k.illumio.com
+    resources:
+      - labelmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - "*"
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+      - watch

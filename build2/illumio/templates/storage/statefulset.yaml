@@ -1,0 +1,102 @@
+{{- if or (eq (lower .Values.clusterMode) "migratelegacytoclas") (eq (lower .Values.clusterMode) "clas") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: illumio-storage
+  namespace: {{ include "illumio.namespace" . }}
+  {{- if .Values.commonLabels }}
+  labels: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+  {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "illumio.renderDictionary" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: 1
+  serviceName: illumio-storage
+  selector:
+    matchLabels:
+      app: illumio-storage
+      {{- if .Values.commonLabels }}
+      {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 6 }}
+      {{- end }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/kubelink/secret.yaml") . | sha256sum }}
+      labels:
+        app: illumio-storage
+        {{- if .Values.commonLabels }}
+        {{- include "illumio.renderDictionary" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.priorityClasses.enabled }}
+      priorityClassName:  {{ .Values.priorityClasses.kubelink }}
+      {{- end }}
+      {{- include "renderPullSecrets" ( dict "images" (list .Values.storage) "context" $ ) | nindent 6 }}
+      {{- if eq .Values.containerManager "kubernetes" }}
+      securityContext:
+        fsGroup: 1001
+      {{- end }}
+      containers:
+        - name: illumio-storage
+          image: "{{ .Values.storage.registry }}/{{ .Values.storage.repo }}:{{ .Values.storage.imageTag }}"
+          imagePullPolicy: {{ .Values.storage.imagePullPolicy | quote }}
+          ports:
+          - containerPort: 2379
+            name: client
+          - containerPort: 2380
+            name: peer
+          volumeMounts:
+          - name: data
+            mountPath: /data
+          env:
+            - name: THIS_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ETCD_DATA_DIR
+              value: /data
+            - name: ETCD_NAME
+              value: "$(THIS_POD_NAME)"
+            - name: ETCD_LISTEN_PEER_URLS
+              value: http://0.0.0.0:2380
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: http://0.0.0.0:2379
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: "http://$(THIS_POD_NAME).illumio-storage:2379"
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: "http://$(THIS_POD_NAME).illumio-storage:2380"
+            - name: ETCD_INITIAL_CLUSTER
+              value: "illumio-storage-0=http://illumio-storage-0.illumio-storage:2380"
+            - name: ETCD_INITIAL_CLUSTER_TOKEN
+              value: illumio-storage-cluster-1
+            - name: ETCD_INITIAL_CLUSTER_STATE
+              value: new
+            - name: ETCD_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: illumio-secret
+                  key: etcd_root_password
+            - name: ETCD_MAX_REQUEST_BYTES
+              value: "33554432"
+            - name: ETCD_MAX_SNAPSHOTS
+              value: "1"
+            - name: ETCD_MAX_WALS
+              value: "1"
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: "1"
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: "revision"
+            - name: ETCD_SNAPSHOT_COUNT
+              value: "10000"
+            - name: ETCD_QUOTA_BACKEND_BYTES
+              value: {{ mul .Values.storage.sizeGi 1024 1024 1024 | quote }}
+            {{- with .Values.storage.additionalEnv }}
+            {{- include "illumio.renderDictionary" ( dict "value" . "context" $ ) | nindent 12 }}
+            {{- end }}
+          resources: {{- include "illumio.renderDictionary" ( dict "value" .Values.storage.resources "context" $ ) | nindent 12 }}
+      volumes:
+      - name: data
+        emptyDir:
+          sizeLimit: {{ .Values.storage.sizeGi }}Gi
+{{- end }}
