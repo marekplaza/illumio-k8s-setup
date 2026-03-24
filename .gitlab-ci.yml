@@ -129,8 +129,14 @@ deploy_illumio:
     - export KUBECONFIG=${KUBECONFIG_FILE}
     - kubectl cluster-info
   script:
-    # Create namespace
+    # Create namespace with privileged PodSecurity (required for C-VEN DaemonSet)
     - kubectl create namespace illumio-system --dry-run=client -o yaml | kubectl apply -f -
+    - |
+      kubectl label namespace illumio-system \
+        pod-security.kubernetes.io/enforce=privileged \
+        pod-security.kubernetes.io/warn=privileged \
+        pod-security.kubernetes.io/audit=privileged \
+        --overwrite
 
     # Create ConfigMap with CA certificates (if provided)
     - mkdir -p build3
