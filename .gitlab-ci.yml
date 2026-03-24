@@ -1,0 +1,217 @@
+# Illumio Core for Kubernetes — GitLab CI Pipeline (vanilla K8s, CLAS mode)
+# Deploys C-VEN + Kubelink via Helm chart to vanilla Kubernetes clusters
+# Version 2.0 — migrated from OpenShift to vanilla K8s, upgraded to Helm 5.9.0 with CLAS
+
+variables:
+  HOME: /tmp
+  # Illumio Helm Chart
+  ILLUMIO_QUAY_REPO: oci://quay.io/illumio/illumio
+  ILLUMIO_QUAY_TAG: "5.9.0"
+  # CLAS mode (recommended) — alternatives: legacy, migrateLegacyToClas
+  CLUSTER_MODE: "clas"
+  # Container runtime/manager defaults for vanilla K8s
+  CONTAINER_RUNTIME: "containerd"
+  CONTAINER_MANAGER: "kubernetes"
+  # Href prefix for Container Cluster ID extraction
+  HREF_PREFIX: "/orgs/$ILLUMIO_ORG/container_clusters/"
+
+# Custom image with kubectl + helm + python3 (see Dockerfile in repo)
+image: registry.gitlab.com/illumio-k8s/illumio-setup:2.0
+
+stages:
+  - build_cc
+  - build_hc
+  - deploy
+  - remove
+
+# ---------------------------------------------------------------------------
+# Stage 1: Create Container Cluster definition in Illumio PCE via REST API
+# Outputs: CC token, CC href, Pairing Profile Activation Code (PPAC)
+# ---------------------------------------------------------------------------
+build_container_cluster:
+  stage: build_cc
+  tags:
+    - jumpoff
+  before_script:
+    - echo "##### -> Stage 1: Create Container Cluster in PCE"
+  script:
+    - mkdir -p build/
+    - python3 cc.py create
+    - python3 pp.py create
+  artifacts:
+    name: "CC_$CI_PIPELINE_ID"
+    paths:
+      - build/
+    expire_in: 10mins
+  after_script:
+    - echo "##### -> Stage 1: DONE"
+
+# ---------------------------------------------------------------------------
+# Stage 2: Pull Helm Chart, customize values.yaml for vanilla K8s + CLAS
+# No image mirroring needed — clusters pull directly from quay.io
+# ---------------------------------------------------------------------------
+build_helm_chart:
+  stage: build_hc
+  tags:
+    - jumpoff
+  before_script:
+    - echo "##### -> Stage 2: Build Helm Chart"
+  script:
+    - export CPU_LIMIT="777m"
+    # Read artifacts from Stage 1
+    - export CC_TOKEN=$(cat build/TOKEN_CC_$CI_PIPELINE_ID)
+    - export CC_PPAC_ID=$(cat build/PPAC_CC_$CI_PIPELINE_ID)
+    - CC_ID_HREF=$(cat build/ID_CC_$CI_PIPELINE_ID)
+    - export CC_ID=${CC_ID_HREF#$HREF_PREFIX}
+    - echo "Container Cluster ID = $CC_ID"
+
+    # Pull Helm chart from quay.io
+    - mkdir -p build2/
+    - helm pull $ILLUMIO_QUAY_REPO --version $ILLUMIO_QUAY_TAG --untar --untardir build2
+
+    # Fix manifests
+    - python3 add_imagePullSecret.py
+    - python3 add_resources_limits.py
+
+    # Extract container image info (for reference/debugging)
+    - python3 extract.py
+    - cat build2/HC_$CI_PIPELINE_ID
+
+    # Prepare values.yaml — inject PCE credentials and K8s/CLAS settings
+    - cp build2/illumio/values.yaml build2/VALUES_$CI_PIPELINE_ID
+    - |
+      sed -i "s|URL_PORT|$ILLUMIO_API_URL|g" build2/VALUES_$CI_PIPELINE_ID
+      sed -i "s|ILO_CLUSTER_UUID|$CC_ID|g" build2/VALUES_$CI_PIPELINE_ID
+      sed -i "s|ILO_CLUSTER_TOKEN|$CC_TOKEN|g" build2/VALUES_$CI_PIPELINE_ID
+      sed -i "s|ILO_CODE|$CC_PPAC_ID|g" build2/VALUES_$CI_PIPELINE_ID
+
+      # Ensure vanilla K8s settings (should be defaults, but explicit is better)
+      sed -i "s|containerRuntime:.*|containerRuntime: ${CONTAINER_RUNTIME}|g" build2/VALUES_$CI_PIPELINE_ID
+      sed -i "s|containerManager:.*|containerManager: ${CONTAINER_MANAGER}|g" build2/VALUES_$CI_PIPELINE_ID
+
+      # Append CLAS mode and additional settings
+      echo "" >> build2/VALUES_$CI_PIPELINE_ID
+      echo "# --- Injected by CI pipeline ---" >> build2/VALUES_$CI_PIPELINE_ID
+      echo "clusterMode: ${CLUSTER_MODE}" >> build2/VALUES_$CI_PIPELINE_ID
+      echo "verbosity: 0" >> build2/VALUES_$CI_PIPELINE_ID
+      echo "ignore_cert: true" >> build2/VALUES_$CI_PIPELINE_ID
+      echo "log_level: 0" >> build2/VALUES_$CI_PIPELINE_ID
+
+    # Append private CA certificate config (if provided)
+    - |
+      if [ -n "$CONFIG_MAP" ] && [ -f "$CONFIG_MAP" ]; then
+        echo "# --- Private CA certificate config ---" >> build2/VALUES_$CI_PIPELINE_ID
+        cat $CONFIG_MAP >> build2/VALUES_$CI_PIPELINE_ID
+      fi
+
+    # Print final values for debugging
+    - echo "===== Final values.yaml ====="
+    - cat build2/VALUES_$CI_PIPELINE_ID
+
+  artifacts:
+    name: "HC_$CI_PIPELINE_ID"
+    paths:
+      - build2/
+    expire_in: 10mins
+  after_script:
+    - echo "##### -> Stage 2: DONE"
+
+# ---------------------------------------------------------------------------
+# Stage 3: Deploy Illumio to Kubernetes cluster via Helm
+# Auth: KUBECONFIG_FILE (GitLab CI variable, type: File)
+# ---------------------------------------------------------------------------
+deploy_illumio:
+  stage: deploy
+  tags:
+    - jumpoff
+  before_script:
+    - echo "##### -> Stage 3: Deploy Illumio to K8s cluster"
+    - export KUBECONFIG=${KUBECONFIG_FILE}
+    - kubectl cluster-info
+  script:
+    # Create namespace
+    - kubectl create namespace illumio-system --dry-run=client -o yaml | kubectl apply -f -
+
+    # Create ConfigMap with CA certificates (if provided)
+    - mkdir -p build3
+    - |
+      if [ -n "$BUNDLE_CA_CRT" ] && [ -f "$BUNDLE_CA_CRT" ]; then
+        cat $BUNDLE_CA_CRT > build3/CC_BUNDLE_CA_CRT.crt
+        kubectl -n illumio-system create configmap root-ca-config \
+          --from-file=build3/CC_BUNDLE_CA_CRT.crt \
+          --dry-run=client -o yaml | kubectl apply -f -
+      fi
+
+    # Print values for debugging
+    - echo "===== Deploying with values ====="
+    - cat build2/VALUES_$CI_PIPELINE_ID
+
+    # Helm install
+    - |
+      helm install --debug illumio \
+        -f build2/VALUES_$CI_PIPELINE_ID \
+        build2/illumio \
+        --version $ILLUMIO_QUAY_TAG \
+        --namespace illumio-system \
+        --create-namespace
+
+    # Wait and verify deployment
+    - echo "Waiting for pods to start..."
+    - sleep 30
+    - kubectl get all -n illumio-system
+    - sleep 15
+
+    # Check Kubelink logs
+    - echo "===== Kubelink logs ====="
+    - kubectl logs deploy/illumio-kubelink -n illumio-system --tail=50 || true
+
+    # Check C-VEN logs (first pod from DaemonSet)
+    - echo "===== C-VEN logs ====="
+    - kubectl logs ds/illumio-ven -n illumio-system --tail=50 || true
+
+    # Check CLAS storage (etcd) if in CLAS mode
+    - |
+      if [ "$CLUSTER_MODE" = "clas" ]; then
+        echo "===== CLAS Storage (etcd) status ====="
+        kubectl get statefulset -n illumio-system || true
+      fi
+
+  artifacts:
+    name: "DEPLOY_$CI_PIPELINE_ID"
+    paths:
+      - build3/
+    expire_in: 10mins
+  after_script:
+    - echo "##### -> Stage 3: DONE"
+
+# ---------------------------------------------------------------------------
+# Stage 4: Remove Illumio from cluster and cleanup PCE (manual trigger only)
+# ---------------------------------------------------------------------------
+remove_illumio:
+  stage: remove
+  tags:
+    - jumpoff
+  before_script:
+    - echo "##### -> Stage 4: Remove Illumio"
+    - export KUBECONFIG=${KUBECONFIG_FILE}
+  script:
+    - CC_ID_HREF=$(cat build/ID_CC_$CI_PIPELINE_ID)
+    - CC_ID=${CC_ID_HREF#$HREF_PREFIX}
+
+    # Helm uninstall (triggers C-VEN unpairing)
+    - helm uninstall --debug illumio --namespace illumio-system || true
+
+    # Wait for unpair jobs to complete
+    - echo "Waiting for unpair to complete..."
+    - sleep 60
+
+    # Delete namespace
+    - kubectl delete namespace illumio-system --ignore-not-found=true
+
+    # Remove Container Cluster from PCE
+    - python3 cc.py delete $CC_ID
+
+  timeout: 5m
+  when: manual
+  after_script:
+    - echo "##### -> Stage 4: DONE"
