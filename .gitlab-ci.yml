@@ -96,11 +96,19 @@ build_helm_chart:
       echo "ignore_cert: true" >> build2/VALUES_$CI_PIPELINE_ID
       echo "log_level: 0" >> build2/VALUES_$CI_PIPELINE_ID
 
-    # Append private CA certificate config (if provided)
+    # Append private CA certificate volume mount (if BUNDLE_CA_CRT is provided)
+    # This mounts the CA cert ConfigMap into C-VEN and Kubelink pods
     - |
-      if [ -n "$CONFIG_MAP" ] && [ -f "$CONFIG_MAP" ]; then
+      if [ -n "$BUNDLE_CA_CRT" ] && [ -f "$BUNDLE_CA_CRT" ]; then
         echo "# --- Private CA certificate config ---" >> build2/VALUES_$CI_PIPELINE_ID
-        cat $CONFIG_MAP >> build2/VALUES_$CI_PIPELINE_ID
+        echo "extraVolumeMounts:" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "  - name: root-ca" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "    mountPath: /etc/pki/tls/ilo_certs/" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "    readOnly: false" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "extraVolumes:" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "  - name: root-ca" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "    configMap:" >> build2/VALUES_$CI_PIPELINE_ID
+        echo "      name: root-ca-config" >> build2/VALUES_$CI_PIPELINE_ID
       fi
 
     # Print final values for debugging

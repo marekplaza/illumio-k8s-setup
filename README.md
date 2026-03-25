@@ -64,20 +64,7 @@ Collect the following from your Illumio PCE administrator and Kubernetes cluster
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `BUNDLE_CA_CRT` | **File** | Root CA + PCE certificate chain (PEM) |
-| `CONFIG_MAP` | **File** | YAML snippet for extraVolumeMounts/extraVolumes (see below) |
-
-`CONFIG_MAP` content example:
-```yaml
-extraVolumeMounts:
-  - name: root-ca
-    mountPath: /etc/pki/tls/ilo_certs/
-    readOnly: false
-extraVolumes:
-  - name: root-ca
-    configMap:
-      name: root-ca-config
-```
+| `BUNDLE_CA_CRT` | **File** | Root CA + PCE certificate chain (PEM). When provided, the pipeline automatically creates a ConfigMap and mounts it into C-VEN/Kubelink pods at `/etc/pki/tls/ilo_certs/` |
 
 ## Pipeline Stages
 
